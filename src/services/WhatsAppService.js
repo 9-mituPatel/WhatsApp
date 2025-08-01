@@ -290,7 +290,7 @@ class WhatsAppService {
   setupEventHandlers(sock, sessionId) {
     logger.info(`🔧 Setting up event handlers for session: ${sessionId}`);
     // Handle incoming messages
-    sock.ev.on('messages.upsert', async ({ messages, type }) = 3e {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
       try {
         logger.info(`📨 Received ${messages.length} messages for session ${sessionId}`);
         for (const message of messages) {
@@ -619,4 +619,3 @@ class WhatsAppService {
 }
 
 export default new WhatsAppService();
-
