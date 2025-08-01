@@ -367,6 +367,23 @@ class WhatsAppService {
       }
 
       const result = await sock.sendMessage(to, { text: message });
+      
+      // Save message to database
+      const messageData = {
+        messageId: result.key.id,
+        sessionId,
+        chatId: to,
+        fromMe: true,
+        sender: sessionId,
+        recipient: to,
+        messageType: 'text',
+        content: { text: message },
+        timestamp: new Date(result.messageTimestamp * 1000),
+        status: 'sent',
+        rawMessage: result
+      };
+      
+      await MessageDAO.saveMessage(messageData);
       logger.info(`📤 Test message sent from ${sessionId} to ${to}`);
       
       // Update session activity
@@ -375,6 +392,231 @@ class WhatsAppService {
       return result;
     } catch (error) {
       logger.error(`Error sending test message from ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Send text message
+  async sendTextMessage(sessionId, to, text, options = {}) {
+    try {
+      const sock = this.activeConnections.get(sessionId);
+      if (!sock) {
+        throw new Error('Session not found or not connected');
+      }
+
+      const messageContent = { text };
+      
+      // Add quoted message if provided
+      if (options.quotedMessageId) {
+        const quotedMsg = await MessageDAO.getMessageById(options.quotedMessageId, sessionId);
+        if (quotedMsg) {
+          messageContent.quoted = quotedMsg.rawMessage;
+        }
+      }
+
+      const result = await sock.sendMessage(to, messageContent);
+      
+      // Save to database
+      const messageData = {
+        messageId: result.key.id,
+        sessionId,
+        chatId: to,
+        fromMe: true,
+        sender: sessionId,
+        recipient: to,
+        messageType: 'text',
+        content: { text },
+        timestamp: new Date(result.messageTimestamp * 1000),
+        status: 'sent',
+        quotedMessage: options.quotedMessageId ? {
+          messageId: options.quotedMessageId,
+          content: text.substring(0, 100),
+          sender: sessionId
+        } : undefined,
+        rawMessage: result
+      };
+      
+      await MessageDAO.saveMessage(messageData);
+      SessionManager.updateSessionActivity(sessionId);
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error sending text message from ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Send image message
+  async sendImageMessage(sessionId, to, imageBuffer, caption = '', mimeType = 'image/jpeg') {
+    try {
+      const sock = this.activeConnections.get(sessionId);
+      if (!sock) {
+        throw new Error('Session not found or not connected');
+      }
+
+      const result = await sock.sendMessage(to, {
+        image: imageBuffer,
+        caption: caption,
+        mimetype: mimeType
+      });
+      
+      // Save to database
+      const messageData = {
+        messageId: result.key.id,
+        sessionId,
+        chatId: to,
+        fromMe: true,
+        sender: sessionId,
+        recipient: to,
+        messageType: 'image',
+        content: { 
+          caption,
+          mimeType,
+          fileSize: imageBuffer.length
+        },
+        timestamp: new Date(result.messageTimestamp * 1000),
+        status: 'sent',
+        rawMessage: result
+      };
+      
+      await MessageDAO.saveMessage(messageData);
+      SessionManager.updateSessionActivity(sessionId);
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error sending image message from ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Send document message
+  async sendDocumentMessage(sessionId, to, documentBuffer, fileName, mimeType) {
+    try {
+      const sock = this.activeConnections.get(sessionId);
+      if (!sock) {
+        throw new Error('Session not found or not connected');
+      }
+
+      const result = await sock.sendMessage(to, {
+        document: documentBuffer,
+        fileName: fileName,
+        mimetype: mimeType
+      });
+      
+      // Save to database
+      const messageData = {
+        messageId: result.key.id,
+        sessionId,
+        chatId: to,
+        fromMe: true,
+        sender: sessionId,
+        recipient: to,
+        messageType: 'document',
+        content: { 
+          fileName,
+          mimeType,
+          fileSize: documentBuffer.length
+        },
+        timestamp: new Date(result.messageTimestamp * 1000),
+        status: 'sent',
+        rawMessage: result
+      };
+      
+      await MessageDAO.saveMessage(messageData);
+      SessionManager.updateSessionActivity(sessionId);
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error sending document message from ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Send location message
+  async sendLocationMessage(sessionId, to, latitude, longitude, address = '') {
+    try {
+      const sock = this.activeConnections.get(sessionId);
+      if (!sock) {
+        throw new Error('Session not found or not connected');
+      }
+
+      const result = await sock.sendMessage(to, {
+        location: {
+          degreesLatitude: latitude,
+          degreesLongitude: longitude,
+          address: address
+        }
+      });
+      
+      // Save to database
+      const messageData = {
+        messageId: result.key.id,
+        sessionId,
+        chatId: to,
+        fromMe: true,
+        sender: sessionId,
+        recipient: to,
+        messageType: 'location',
+        content: { 
+          location: {
+            latitude,
+            longitude,
+            address
+          }
+        },
+        timestamp: new Date(result.messageTimestamp * 1000),
+        status: 'sent',
+        rawMessage: result
+      };
+      
+      await MessageDAO.saveMessage(messageData);
+      SessionManager.updateSessionActivity(sessionId);
+      
+      return result;
+    } catch (error) {
+      logger.error(`Error sending location message from ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Get chat messages
+  async getChatMessages(sessionId, chatId, limit = 20, offset = 0) {
+    try {
+      return await MessageDAO.getRecentMessages(sessionId, chatId, limit, offset);
+    } catch (error) {
+      logger.error(`Error getting chat messages for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Get all chats
+  async getAllChats(sessionId, limit = 50) {
+    try {
+      return await MessageDAO.getAllChatsWithLastMessage(sessionId, limit);
+    } catch (error) {
+      logger.error(`Error getting all chats for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Mark messages as read
+  async markMessagesAsRead(sessionId, chatId) {
+    try {
+      const sock = this.activeConnections.get(sessionId);
+      if (!sock) {
+        throw new Error('Session not found or not connected');
+      }
+
+      // Mark as read in WhatsApp
+      await sock.readMessages([{ remoteJid: chatId, id: 'all', participant: undefined }]);
+      
+      // Update database
+      await MessageDAO.markMessagesAsRead(sessionId, chatId);
+      
+      SessionManager.updateSessionActivity(sessionId);
+      return true;
+    } catch (error) {
+      logger.error(`Error marking messages as read for ${sessionId}:`, error);
       throw error;
     }
   }
