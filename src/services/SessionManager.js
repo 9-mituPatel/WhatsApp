@@ -13,10 +13,10 @@ class SessionManager {
     // Configuration
     this.config = {
       QR_EXPIRY_TIME: 5 * 60 * 1000, // 5 minutes
-      SESSION_IDLE_TIME: 30 * 60 * 1000, // 30 minutes of inactivity
-      MAX_SESSION_TIME: 24 * 60 * 60 * 1000, // 24 hours max session
-      CLEANUP_INTERVAL: 10 * 60 * 1000, // 10 minutes cleanup
-      MAX_CONCURRENT_SESSIONS: 10 // Max sessions per instance
+      SESSION_IDLE_TIME: 15 * 60 * 1000, // 15 minutes of inactivity (reduced from 30)
+      MAX_SESSION_TIME: 2 * 60 * 60 * 1000, // 2 hours max session (reduced from 24)
+      CLEANUP_INTERVAL: 5 * 60 * 1000, // 5 minutes cleanup (more frequent)
+      MAX_CONCURRENT_SESSIONS: 50 // Max sessions per instance (increased for better scalability)
     };
     
     this.startCleanupScheduler();

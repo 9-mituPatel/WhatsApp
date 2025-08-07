@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp QR Login</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 30px;
+            background-color: #f9f9f9;
+        }
+        .qr-container {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            background-color: white;
+        }
+        .qr-code {
+            max-width: 300px;
+            max-height: 300px;
+        }
+        .status {
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status.qr_generated {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.connected {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .user-info {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #e7f3ff;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #25d366;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        button:hover {
+            background-color: #128c7e;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .dashboard-btn {
+            background-color: #007bff;
+        }
+        .dashboard-btn:hover {
+            background-color: #0056b3;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WhatsApp QR Login</h1>
+        
+        <div id="login-section">
+            <button id="loginBtn" onclick="startLogin()">Generate QR Code</button>
+            <div id="status" class="status connecting hidden">Connecting...</div>
+            <div id="qr-container" class="qr-container hidden">
+                <h3>Scan QR Code with WhatsApp</h3>
+                <img id="qr-code" class="qr-code" alt="QR Code">
+                <p>Open WhatsApp on your phone → Menu → Linked Devices → Link a Device</p>
+                <div style="margin-top: 15px;">
+                    <p id="qr-timer" style="color: #666; font-size: 14px;">QR Code expires in: <span id="countdown">5:00</span></p>
+                    <button id="refresh-btn" onclick="refreshQR()" style="background-color: #ffc107; color: #000;">🔄 Refresh QR Code</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="user-section" class="hidden">
+            <div class="user-info">
+                <h3>✅ Successfully Connected!</h3>
+                <div id="user-details"></div>
+            </div>
+            <button class="dashboard-btn" onclick="goToDashboard()">Go to Dashboard</button>
+            <button onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <script>
+        let socket;
+        let sessionId;
+        let countdownTimer;
+        let timeLeft = 300; // 5 minutes in seconds
+        let isConnected = false;
+        let isScanning = false;
+        let scanCompletedSuccessfully = false;
+
+        function generateSessionId() {
+            return Date.now() + '_' + Math.random().toString(36).substr(2, 9) + '_Mozilla5';
+        }
+
+function startLogin(autoRefresh = false) {
+    // Prevent multiple simultaneous login attempts
+    if (isScanning && !autoRefresh) {
+        console.log('Login already in progress, ignoring request');
+        return;
+    }
+    
+    // If already connected, don't start login again
+    if (isConnected || scanCompletedSuccessfully) {
+        console.log('Already connected or scan completed, ignoring login request');
+        return;
+    }
+
+    isScanning = true;
+    
+    if (!autoRefresh) {
+        sessionId = generateSessionId();
+        // Reset states for new session
+        isConnected = false;
+        scanCompletedSuccessfully = false;
+    }
+    console.log('Starting login with session ID:', sessionId);
+            
+            // Initialize Socket.IO connection
+            socket = io('http://localhost:3000');
+            
+            socket.on('connect', () => {
+                console.log('Socket connected:', socket.id);
+                socket.emit('join-session', sessionId);
+            });
+
+            // Listen for QR code
+            socket.on('qr-code', (data) => {
+                console.log('QR code received:', data);
+                displayQRCode(data.qrCode);
+                updateStatus('qr_generated', 'QR Code generated! Scan with your phone.');
+            });
+
+            // Listen for status updates
+            socket.on('status-update', (data) => {
+                console.log('Status update:', data);
+                
+                if (data.status === 'connected') {
+                    // Mark as connected and completed
+                    isConnected = true;
+                    scanCompletedSuccessfully = true;
+                    isScanning = false;
+                    
+                    // Clear countdown timer when connected
+                    if (countdownTimer) {
+                        clearInterval(countdownTimer);
+                        countdownTimer = null;
+                    }
+                    
+                    showUserInfo(data.user);
+                    updateStatus('connected', data.message);
+                    
+                    // Stop any further QR refresh attempts
+                    console.log('🎉 Connection successful - stopping all refresh timers');
+                } else if (data.status === 'connecting') {
+                    updateStatus('connecting', data.message || 'Connecting to WhatsApp...');
+                } else if (data.status === 'reconnecting') {
+                    updateStatus('connecting', data.message || 'Reconnecting to WhatsApp...');
+                } else {
+                    updateStatus(data.status, data.message);
+                }
+            });
+
+            // Listen for authentication success (NEW)
+            socket.on('auth-success', (data) => {
+                console.log('✅ Authentication successful!', data);
+                
+                // Clear countdown timer when authenticated
+                if (countdownTimer) {
+                    clearInterval(countdownTimer);
+                }
+                
+                // Show user info and success message
+                if (data.user) {
+                    showUserInfo(data.user);
+                }
+                updateStatus('connected', 'Successfully authenticated with WhatsApp!');
+            });
+
+socket.on('qr-refresh', (data) => {
+    // Only refresh if not already connected
+    if (!isConnected && !scanCompletedSuccessfully) {
+        alert(data.message);
+        startLogin(true);
+    } else {
+        console.log('Ignoring QR refresh - already connected');
+    }
+});
+
+socket.on('qr-auto-refresh', () => {
+    // Only auto-refresh if not already connected
+    if (!isConnected && !scanCompletedSuccessfully) {
+        console.log('Auto-refreshing QR Code');
+        startLogin(true);
+    } else {
+        console.log('Ignoring QR auto-refresh - already connected');
+    }
+});
+
+socket.on('disconnect', () => {
+                console.log('Socket disconnected');
+            });
+
+            // Call backend to generate QR
+            fetch('http://localhost:3000/api/auth/QRlogin', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ sessionId: sessionId })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Backend response:', data);
+                if (data.success) {
+                    if (data.data.status === 'connected') {
+                        // Already connected or auto-reconnected
+                        if (data.data.alreadyConnected) {
+                            console.log('✅ Session already connected, showing dashboard immediately');
+                            updateStatus('connected', 'Already connected to WhatsApp!');
+                        } else if (data.data.autoReconnected) {
+                            console.log('✅ Session auto-reconnected, showing dashboard immediately');
+                            updateStatus('connected', 'Auto-reconnected to WhatsApp!');
+                        } else {
+                            updateStatus('connected', 'Connected to WhatsApp!');
+                        }
+                        
+                        // Clear any existing timers
+                        if (countdownTimer) {
+                            clearInterval(countdownTimer);
+                        }
+                        
+                        // Show user info and dashboard
+                        showUserInfo(data.data.user);
+                        
+                    } else if (data.data.qrCode) {
+                        // QR code generated
+                        displayQRCode(data.data.qrCode);
+                        updateStatus('qr_generated', 'QR Code generated! Scan with your phone.');
+                    } else {
+                        updateStatus('connecting', data.message || 'Connecting to WhatsApp...');
+                    }
+                } else {
+                    updateStatus('error', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                updateStatus('error', 'Failed to connect to server');
+            });
+
+            document.getElementById('loginBtn').disabled = true;
+            updateStatus('connecting', 'Connecting to WhatsApp...');
+        }
+
+        function displayQRCode(qrCode) {
+            const qrImg = document.getElementById('qr-code');
+            const qrContainer = document.getElementById('qr-container');
+            
+            qrImg.src = qrCode;
+            qrContainer.classList.remove('hidden');
+            
+            // Start countdown timer
+            startCountdown();
+        }
+        
+        function startCountdown() {
+            // Clear existing timer
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+            }
+            
+            timeLeft = 300; // Reset to 5 minutes
+            updateCountdownDisplay();
+            
+            countdownTimer = setInterval(() => {
+                // Stop countdown if already connected
+                if (isConnected || scanCompletedSuccessfully) {
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                    console.log('Stopping countdown - connection successful');
+                    return;
+                }
+                
+                timeLeft--;
+                updateCountdownDisplay();
+                
+                if (timeLeft <= 0) {
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                    // Only auto refresh if not connected
+                    if (!isConnected && !scanCompletedSuccessfully) {
+                        console.log('Countdown expired - attempting QR refresh');
+                        refreshQR();
+                    } else {
+                        console.log('Countdown expired but already connected - ignoring refresh');
+                    }
+                }
+            }, 1000);
+        }
+        
+        function updateCountdownDisplay() {
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            const countdownEl = document.getElementById('countdown');
+            if (countdownEl) {
+                countdownEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                
+                // Change color when less than 1 minute
+                const timerEl = document.getElementById('qr-timer');
+                if (timeLeft < 60) {
+                    timerEl.style.color = '#dc3545'; // Red color
+                } else {
+                    timerEl.style.color = '#666'; // Default color
+                }
+            }
+        }
+        
+        function refreshQR() {
+            if (!sessionId) return;
+            
+            // Don't refresh if already connected
+            if (isConnected || scanCompletedSuccessfully) {
+                console.log('RefreshQR called but already connected - ignoring');
+                return;
+            }
+            
+            console.log('Manual QR refresh requested');
+            
+            // Call refresh endpoint
+            fetch(`http://localhost:3000/api/auth/refresh-qr/${sessionId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Refresh response:', data);
+                if (data.success) {
+                    updateStatus('connecting', 'Refreshing QR Code...');
+                    // Start login with same session ID
+                    setTimeout(() => {
+                        startLogin(true);
+                    }, 1000);
+                } else {
+                    updateStatus('error', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Refresh error:', error);
+                updateStatus('error', 'Failed to refresh QR code');
+            });
+        }
+
+        function updateStatus(status, message) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+            statusEl.classList.remove('hidden');
+        }
+
+        function showUserInfo(user) {
+            if (!user) return;
+            
+            const userDetails = document.getElementById('user-details');
+            userDetails.innerHTML = `
+                <p><strong>Name:</strong> ${user.name || 'N/A'}</p>
+                <p><strong>Phone:</strong> ${user.id ? user.id.split('@')[0] : 'N/A'}</p>
+            `;
+            
+            document.getElementById('login-section').classList.add('hidden');
+            document.getElementById('user-section').classList.remove('hidden');
+        }
+
+        function goToDashboard() {
+            // Redirect to dashboard page
+            window.location.href = '/dashboard';
+        }
+
+        function logout() {
+            if (!sessionId) return;
+            
+            fetch(`http://localhost:3000/api/auth/logout/${sessionId}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Logout response:', data);
+                if (socket) {
+                    socket.disconnect();
+                }
+                
+                // Clear any running timers
+                if (countdownTimer) {
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                }
+                
+                // Reset all state variables
+                isConnected = false;
+                isScanning = false;
+                scanCompletedSuccessfully = false;
+                
+                // Reset UI
+                document.getElementById('login-section').classList.remove('hidden');
+                document.getElementById('user-section').classList.add('hidden');
+                document.getElementById('qr-container').classList.add('hidden');
+                document.getElementById('status').classList.add('hidden');
+                document.getElementById('loginBtn').disabled = false;
+                sessionId = null;
+                
+                console.log('✅ Logout complete - all states reset');
+            })
+            .catch(error => {
+                console.error('Logout error:', error);
+            });
+        }
+
+        // Check for existing session on page load
+        window.onload = function() {
+            console.log('Page loaded');
+        };
+    </script>
+</body>
+</html>

@@ -5,35 +5,34 @@ import path from 'path';
 import WhatsAppSessionDAO from '../dao/WhatsAppSessionDAO.js';
 import MessageDAO from '../dao/MessageDAO.js';
 import SessionManager from './SessionManager.js';
+import { emitToSession } from '../utils/socketManager.js';
 import logger from '../utils/logger.js';
 
-// Create Baileys-compatible logger with detailed output
+// Create optimized Baileys logger with error filtering
 const baileysLogger = {
-  level: 'info', // Changed from 'silent' to see more details
+  level: 'silent', // Suppress most Baileys logs
   fatal: (...args) => {
-    console.log('🔴 BAILEYS FATAL:', ...args);
-    logger.error(...args);
+    const errorStr = args.join(' ');
+    console.log('🔴 BAILEYS FATAL:', errorStr);
+    logger.error('Baileys Fatal:', errorStr);
   },
   error: (...args) => {
-    console.log('🔴 BAILEYS ERROR:', ...args);
-    logger.error(...args);
+    const errorStr = args.join(' ');
+    // Filter out common non-critical errors
+    if (!errorStr.includes('stream-error') && 
+        !errorStr.includes('connection-close') && 
+        !errorStr.includes('ECONNRESET') &&
+        !errorStr.includes('socket hang up') &&
+        !errorStr.includes('ENOTFOUND') &&
+        !errorStr.includes('timeout')) {
+      console.log('🟡 BAILEYS ERROR:', errorStr);
+      logger.warn('Baileys Error:', errorStr);
+    }
   },
-  warn: (...args) => {
-    console.log('🟡 BAILEYS WARN:', ...args);
-    logger.warn(...args);
-  },
-  info: (...args) => {
-    console.log('🔵 BAILEYS INFO:', ...args);
-    logger.info(...args);
-  },
-  debug: (...args) => {
-    console.log('⚪ BAILEYS DEBUG:', ...args);
-    logger.debug(...args);
-  },
-  trace: (...args) => {
-    console.log('⚫ BAILEYS TRACE:', ...args);
-    logger.debug(...args);
-  },
+  warn: () => {}, // Suppress warnings
+  info: () => {}, // Suppress info messages  
+  debug: () => {}, // Suppress debug messages
+  trace: () => {}, // Suppress trace messages
   child: () => baileysLogger
 };
 
@@ -44,15 +43,57 @@ class WhatsAppService {
 
   async createSession(sessionId) {
     try {
-      // Check if session already exists
+      // Check if session already exists and is connected
       const existingSession = this.activeConnections.get(sessionId);
+      if (existingSession && existingSession.user) {
+        logger.info(`Session ${sessionId} already connected, returning existing connection`);
+        const userData = {
+          id: existingSession.user?.id,
+          name: existingSession.user?.name,
+          phone: existingSession.user?.id?.split(':')[0]
+        };
+        
+        // Return existing connected session info
+        return {
+          status: 'connected',
+          message: 'Already connected to WhatsApp',
+          user: userData,
+          alreadyConnected: true
+        };
+      }
+      
+      // Check if there's an existing session directory with valid auth
+      const sessionPath = path.join(process.cwd(), 'sessions', sessionId);
+      const credsPath = path.join(sessionPath, 'creds.json');
+      
+      if (fs.existsSync(credsPath)) {
+        try {
+          const credsData = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+          if (credsData && credsData.me && credsData.me.id) {
+            logger.info(`Found existing credentials for ${sessionId}, attempting auto-reconnect...`);
+            
+            // Try to reconnect with existing credentials
+            const reconnectResult = await this.attemptReconnection(sessionId);
+            if (reconnectResult) {
+              return reconnectResult;
+            }
+          }
+        } catch (error) {
+          logger.warn(`Failed to read existing credentials for ${sessionId}:`, error.message);
+        }
+      }
+      
+      // If we have an existing session but it's not connected, clean it up
       if (existingSession) {
-        logger.warn(`Session ${sessionId} already exists, terminating old session`);
+        logger.warn(`Session ${sessionId} exists but not connected, terminating old session`);
         await this.logoutSession(sessionId);
       }
 
-      // Create session directory
-      const sessionPath = path.join(process.cwd(), 'sessions', sessionId);
+      // Create session directory if it doesn't exist
+      if (!fs.existsSync(sessionPath)) {
+        fs.mkdirSync(sessionPath, { recursive: true });
+        logger.info(`Created session directory: ${sessionPath}`);
+      }
       if (!fs.existsSync(sessionPath)) {
         fs.mkdirSync(sessionPath, { recursive: true });
         logger.info(`Created session directory: ${sessionPath}`);
@@ -188,6 +229,17 @@ class WhatsAppService {
           logger.info(`🔄 Connecting WhatsApp for session: ${sessionId}`);
           connectionStatus = 'connecting';
           await SessionManager.updateSessionStatus(sessionId, 'connecting');
+          
+          // Notify frontend via WebSocket
+          try {
+            emitToSession(sessionId, 'auth-status', {
+              sessionId: sessionId,
+              status: 'connecting',
+              message: 'Connecting to WhatsApp...'
+            });
+          } catch (error) {
+            logger.warn('Failed to emit connecting status:', error.message);
+          }
         }
         
         else if (connection === 'open') {
@@ -215,6 +267,34 @@ class WhatsAppService {
           // Set up message and event handlers
           this.setupEventHandlers(sock, sessionId);
           
+          // 🚨 CRITICAL: Notify frontend via WebSocket of successful authentication
+          try {
+            const userData = {
+              id: sock.user?.id,
+              name: sock.user?.name,
+              phone: sock.user?.id?.split(':')[0]
+            };
+            
+            console.log(`🔔 Emitting auth-success for session: ${sessionId}`);
+            console.log(`📱 User data:`, userData);
+            
+            // Add a small delay to ensure session is fully established
+            setTimeout(() => {
+              emitToSession(sessionId, 'auth-success', {
+                sessionId: sessionId,
+                status: 'authenticated', 
+                user: userData,
+                message: 'WhatsApp authentication successful!',
+                timestamp: new Date().toISOString()
+              });
+              console.log(`✅ Frontend notified of successful authentication for ${sessionId}`);
+            }, 1000); // 1 second delay
+            
+          } catch (error) {
+            logger.error('Failed to emit auth-success:', error.message);
+            console.error('Full error:', error);
+          }
+          
           clearTimeout(timeout);
           
           // Don't resolve here if QR was already sent
@@ -241,6 +321,18 @@ class WhatsAppService {
           if (reason === 515) {
             console.log('🔄 Error 515: Connection restart required after pairing');
             isPaired = true;
+            
+            // Notify frontend that syncing is happening
+            try {
+              emitToSession(sessionId, 'auth-status', {
+                sessionId: sessionId,
+                status: 'syncing',
+                message: 'WhatsApp is syncing data...'
+              });
+              console.log(`🔄 Frontend notified of syncing status for ${sessionId}`);
+            } catch (error) {
+              logger.warn('Failed to emit syncing status:', error.message);
+            }
             
             // Wait a moment and then reconnect
             setTimeout(async () => {
@@ -672,6 +764,141 @@ class WhatsAppService {
     }
   }
 
+  // Attempt reconnection with existing credentials
+  async attemptReconnection(sessionId) {
+    try {
+      console.log(`🔄 Attempting auto-reconnection for session: ${sessionId}`);
+      
+      // Get session path
+      const sessionPath = path.join(process.cwd(), 'sessions', sessionId);
+      
+      // Load auth state
+      const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+      
+      // Check if we have valid credentials
+      if (!state.creds || !state.creds.me || !state.creds.me.id) {
+        console.log(`❌ No valid credentials found for ${sessionId}`);
+        return null;
+      }
+      
+      console.log(`✅ Valid credentials found for ${sessionId}, attempting connection...`);
+      
+      // Create socket with existing credentials
+      const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: baileysLogger,
+        browser: ['WhatsApp Web', 'Chrome', '1.0.0'],
+        connectTimeoutMs: 30000,
+        defaultQueryTimeoutMs: 30000,
+        keepAliveIntervalMs: 10000,
+        emitOwnEvents: true,
+        fireInitQueries: true,
+        generateHighQualityLinkPreview: true,
+        syncFullHistory: false,
+        markOnlineOnConnect: true,
+        shouldSyncHistoryMessage: msg => {
+          return !!msg.message && !msg.key.remoteJid?.endsWith('@g.us');
+        },
+        linkPreviewImageThumbnailWidth: 192,
+        transactionOpts: {
+          maxCommitRetries: 5,
+          delayBetweenTriesMs: 3000
+        }
+      });
+      
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          console.log(`⏰ Auto-reconnection timeout for ${sessionId}`);
+          sock.end(undefined);
+          resolve(null);
+        }, 20000); // 20 second timeout for auto-reconnection
+        
+        sock.ev.on('creds.update', async () => {
+          try {
+            await saveCreds();
+            console.log(`🔐 Credentials updated during auto-reconnection: ${sessionId}`);
+          } catch (error) {
+            console.log(`❌ Error saving credentials during auto-reconnection:`, error);
+          }
+        });
+        
+        sock.ev.on('connection.update', async (update) => {
+          const { connection, lastDisconnect } = update;
+          
+          console.log(`🔄 Auto-reconnection update for ${sessionId}:`, { 
+            connection,
+            lastDisconnect: lastDisconnect?.error?.output?.statusCode 
+          });
+          
+          if (connection === 'open') {
+            console.log(`✅ Auto-reconnection successful for session: ${sessionId}`);
+            clearTimeout(timeout);
+            
+            // Store the connected session
+            this.activeConnections.set(sessionId, sock);
+            
+            // Set up message handlers
+            this.setupEventHandlers(sock, sessionId);
+            
+            // Update session status
+            await SessionManager.updateSessionStatus(sessionId, 'connected', {
+              user: sock.user,
+              phoneNumber: sock.user?.id?.split(':')[0] || null,
+              connectionData: {
+                connectedAt: new Date(),
+                userAgent: sock.user?.name,
+                deviceId: sock.user?.id,
+                autoReconnected: true
+              }
+            });
+            
+            const userData = {
+              id: sock.user?.id,
+              name: sock.user?.name,
+              phone: sock.user?.id?.split(':')[0]
+            };
+            
+            // Notify frontend immediately
+            try {
+              emitToSession(sessionId, 'auth-success', {
+                sessionId: sessionId,
+                status: 'authenticated',
+                user: userData,
+                message: 'WhatsApp auto-reconnected successfully!',
+                timestamp: new Date().toISOString(),
+                autoReconnected: true
+              });
+              console.log(`✅ Frontend notified of auto-reconnection success for ${sessionId}`);
+            } catch (error) {
+              console.log(`❌ Failed to notify frontend of auto-reconnection:`, error);
+            }
+            
+            resolve({
+              status: 'connected',
+              message: 'Auto-reconnected successfully',
+              user: userData,
+              autoReconnected: true
+            });
+            
+          } else if (connection === 'close') {
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            console.log(`❌ Auto-reconnection failed for ${sessionId}. Reason: ${reason}`);
+            clearTimeout(timeout);
+            
+            // Clean up failed connection
+            this.activeConnections.delete(sessionId);
+            resolve(null);
+          }
+        });
+      });
+      
+    } catch (error) {
+      console.log(`❌ Error in attemptReconnection for ${sessionId}:`, error.message);
+      return null;
+    }
+  }
+  
   // Reconnect session after successful pairing
   async reconnectSession(sessionId) {
     try {
@@ -755,6 +982,29 @@ class WhatsAppService {
           
           // Set up message handlers
           this.setupEventHandlers(sock, sessionId);
+          
+          // 🚨 CRITICAL: Notify frontend via WebSocket of successful reconnection
+          try {
+            const userData = {
+              id: sock.user?.id,
+              name: sock.user?.name,
+              phone: sock.user?.id?.split(':')[0]
+            };
+            
+            console.log(`🔔 Emitting auth-success for reconnected session: ${sessionId}`);
+            emitToSession(sessionId, 'auth-success', {
+              sessionId: sessionId,
+              status: 'authenticated',
+              user: userData,
+              message: 'WhatsApp reconnection successful!',
+              timestamp: new Date().toISOString(),
+              reconnected: true
+            });
+            
+            console.log(`✅ Frontend notified of successful reconnection for ${sessionId}`);
+          } catch (error) {
+            logger.error('Failed to emit reconnection auth-success:', error.message);
+          }
           
           console.log(`🎉 Session ${sessionId} is now fully connected and active!`);
           

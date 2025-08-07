@@ -25,14 +25,43 @@ class WhatsAppController {
             console.log('✅ Session creation completed');
             console.log('📊 Result:', JSON.stringify(result, null, 2));
             
-            const response = {
-                success: true,
-                message: "QR Code generated successfully",
-                data: {
-                    sessionId,
-                    ...result
-                }
-            };
+            let response;
+            
+            if (result.status === 'connected' && result.alreadyConnected) {
+                // Session is already connected
+                response = {
+                    success: true,
+                    message: "Already connected to WhatsApp",
+                    data: {
+                        sessionId,
+                        status: 'connected',
+                        user: result.user,
+                        alreadyConnected: true
+                    }
+                };
+            } else if (result.status === 'connected' && result.autoReconnected) {
+                // Session auto-reconnected
+                response = {
+                    success: true,
+                    message: "Auto-reconnected to WhatsApp",
+                    data: {
+                        sessionId,
+                        status: 'connected',
+                        user: result.user,
+                        autoReconnected: true
+                    }
+                };
+            } else {
+                // QR code generated or other status
+                response = {
+                    success: true,
+                    message: result.qrCode ? "QR Code generated successfully" : result.message || "Session created",
+                    data: {
+                        sessionId,
+                        ...result
+                    }
+                };
+            }
             
             console.log('📤 Sending response:', JSON.stringify(response, null, 2));
             console.log('🏁 ===== QR LOGIN REQUEST COMPLETED =====\n');
