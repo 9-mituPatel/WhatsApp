@@ -1,11 +1,10 @@
 import express from 'express';
 import { makeWASocket, DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
-import { emitToSession, emitGlobal } from '../utils/socketManager.js';
+import { emitToSession } from '../utils/socketManager.js';
 
 const router = express.Router();
 
