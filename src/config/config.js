@@ -59,16 +59,49 @@ export default {
     env: envVars.NODE_ENV,
     port: envVars.PORT,
 
+    app: {
+        name: 'WhatsApp API',
+        version: '2.0.0'
+    },
+
     mongo: {
         uri: envVars.MONGO_URI,
+        options: {
+            maxPoolSize: 20,
+            minPoolSize: 5,
+            serverSelectionTimeoutMS: 5000,
+            socketTimeoutMS: 45000,
+            bufferCommands: false
+        }
     },
 
     jwt: {
         secret: envVars.JWT_SECRET,
+        accessTokenExpiry: '15m',
+        refreshTokenExpiry: '7d'
     },
 
     redis: {
         url: envVars.REDIS_URL || null,
+        host: envVars.REDIS_HOST || 'localhost',
+        port: parseInt(envVars.REDIS_PORT) || 6379,
+        password: envVars.REDIS_PASSWORD || null,
+        db: parseInt(envVars.REDIS_DB) || 0,
         useForSocketIO: envVars.SOCKET_IO_REDIS_ADAPTER || false,
+    },
+
+    security: {
+        rateLimitPublic: 100, // requests per 15 minutes
+        rateLimitAuth: 20,    // requests per 15 minutes for auth endpoints
+        bcryptRounds: 12,
+        sessionTimeout: 24 * 60 * 60, // 24 hours in seconds
+    },
+
+    whatsapp: {
+        maxConcurrentSessions: 50,
+        qrExpiryTime: 5 * 60 * 1000,      // 5 minutes
+        sessionIdleTime: 15 * 60 * 1000,   // 15 minutes
+        maxSessionTime: 2 * 60 * 60 * 1000, // 2 hours
+        cleanupInterval: 5 * 60 * 1000      // 5 minutes
     }
 };

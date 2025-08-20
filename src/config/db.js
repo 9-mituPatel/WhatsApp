@@ -2,17 +2,17 @@ import mongoose from 'mongoose';
 import config from './config.js';
 import logger from '../utils/logger.js';
 
-// Define connection options
+// Define connection options (updated for Mongoose 8+)
 const options = {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
   family: 4, // Use IPv4, skip trying IPv6
-  maxPoolSize: 10, // Maximum number of connections in the connection pool
-  minPoolSize: 5,  // Minimum number of connections in the connection pool
+  maxPoolSize: config.mongo.options?.maxPoolSize || 20,
+  minPoolSize: config.mongo.options?.minPoolSize || 5,
   maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
   connectTimeoutMS: 10000, // Give up initial connection after 10 seconds
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+  bufferCommands: config.mongo.options?.bufferCommands ?? false,
+  // Removed deprecated options that are now defaults in Mongoose 8+
 };
 
 // Asynchronous function to connect to MongoDB
