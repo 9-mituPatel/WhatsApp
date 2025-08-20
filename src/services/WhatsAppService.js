@@ -101,29 +101,37 @@ class WhatsAppService {
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
       logger.info(`Auth state loaded for session: ${sessionId}`);
 
-      // Create WhatsApp socket connection with better configuration
+      // Create WhatsApp socket connection with optimized configuration for better authentication
       const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         logger: baileysLogger,
-        browser: ['WhatsApp Web', 'Chrome', '1.0.0'], // Changed browser name
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000, // Increased timeout
-        keepAliveIntervalMs: 10000,
+        browser: ['WhatsApp Business', 'Desktop', '2.2413.51'], // More reliable browser identifier
+        connectTimeoutMs: 90000, // Increased timeout for slow connections
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000, // Standard WhatsApp keepalive
         emitOwnEvents: true,
         fireInitQueries: true,
-        generateHighQualityLinkPreview: true,
+        generateHighQualityLinkPreview: false, // Disable to prevent issues
         syncFullHistory: false,
-        markOnlineOnConnect: true,
-        // Add these important options
+        markOnlineOnConnect: false, // Don't mark online immediately
         shouldSyncHistoryMessage: msg => {
-          return !!msg.message && !msg.key.remoteJid?.endsWith('@g.us');
+          return false; // Disable history sync to prevent authentication issues
         },
-        // shouldIgnoreJid: jid => isJidBroadcast(jid),
+        shouldIgnoreJid: jid => isJidBroadcast(jid),
         linkPreviewImageThumbnailWidth: 192,
         transactionOpts: {
-          maxCommitRetries: 5,
-          delayBetweenTriesMs: 3000
+          maxCommitRetries: 10,
+          delayBetweenTriesMs: 5000
+        },
+        // Additional stability options
+        qrTimeout: 30000,
+        retryRequestDelayMs: 5000,
+        maxMsgRetryCount: 3,
+        msgRetryCounterMap: {},
+        getMessage: async (key) => {
+          // Return null to avoid message retrieval issues during auth
+          return null;
         }
       });
 
@@ -171,7 +179,7 @@ class WhatsAppService {
           sock.end(undefined);
           reject(new Error('Connection timeout'));
         }
-      }, 45000); // Increased timeout
+      }, 120000); // Increased to 2 minutes for authentication process
 
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr, isNewLogin } = update;
@@ -219,8 +227,9 @@ class WhatsAppService {
             emitToSession(sessionId, 'auth-status', {
               sessionId: sessionId,
               status: 'connecting',
-              message: 'Connecting to WhatsApp...'
+              message: 'QR code scanned! Connecting to WhatsApp...'
             });
+            console.log(`📱 QR code scanned for session: ${sessionId}`);
           } catch (error) {
             logger.warn('Failed to emit connecting status:', error.message);
           }
@@ -298,11 +307,111 @@ class WhatsAppService {
         else if (connection === 'close') {
           const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
           const reason = lastDisconnect?.error?.output?.statusCode;
+          const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
           
-          console.log(`❌ Connection closed for session ${sessionId}. Reason: ${reason}`);
+          console.log(`❌ Connection closed for session ${sessionId}. Reason: ${reason} - ${errorMessage}`);
           
-          // Handle specific error codes
-          if (reason === 515) {
+          // Handle specific WhatsApp error codes
+          if (reason === 400) {
+            console.log('❌ Error 400: Bad Request - Invalid QR code or authentication failed');
+            // Emit error to frontend
+            try {
+              emitToSession(sessionId, 'auth-error', {
+                sessionId: sessionId,
+                error: 'authentication_failed',
+                message: 'Authentication failed. Please try again with a fresh QR code.',
+                code: 400
+              });
+            } catch (error) {
+              console.log('Failed to emit auth error:', error.message);
+            }
+            
+            clearTimeout(timeout);
+            reject(new Error('Authentication failed - Invalid credentials'));
+            return;
+          }
+          else if (reason === 401) {
+            console.log('❌ Error 401: Unauthorized - Session credentials are invalid');
+            // Clean up invalid session
+            this.activeConnections.delete(sessionId);
+            await SessionManager.removeSession(sessionId, 'unauthorized');
+            
+            try {
+              emitToSession(sessionId, 'auth-error', {
+                sessionId: sessionId,
+                error: 'unauthorized',
+                message: 'Session expired or unauthorized. Please scan QR code again.',
+                code: 401
+              });
+            } catch (error) {
+              console.log('Failed to emit auth error:', error.message);
+            }
+            
+            clearTimeout(timeout);
+            reject(new Error('Session unauthorized'));
+            return;
+          }
+          else if (reason === 403) {
+            console.log('❌ Error 403: Forbidden - WhatsApp account may be banned or restricted');
+            try {
+              emitToSession(sessionId, 'auth-error', {
+                sessionId: sessionId,
+                error: 'forbidden',
+                message: 'Account access forbidden. Your WhatsApp account may be temporarily restricted.',
+                code: 403
+              });
+            } catch (error) {
+              console.log('Failed to emit auth error:', error.message);
+            }
+            
+            clearTimeout(timeout);
+            reject(new Error('WhatsApp account restricted'));
+            return;
+          }
+          else if (reason === 428) {
+            console.log('❌ Error 428: Connection was opened, need to restart connection');
+            isPaired = true;
+            
+            try {
+              emitToSession(sessionId, 'auth-status', {
+                sessionId: sessionId,
+                status: 'pairing_success',
+                message: 'QR code scanned successfully! Connecting...'
+              });
+            } catch (error) {
+              console.log('Failed to emit pairing success:', error.message);
+            }
+            
+            // Attempt to reconnect after brief delay
+            setTimeout(async () => {
+              try {
+                console.log('🔄 Attempting to reconnect after pairing success...');
+                await this.reconnectSession(sessionId);
+              } catch (error) {
+                console.log('❌ Reconnection after pairing failed:', error.message);
+                try {
+                  emitToSession(sessionId, 'auth-error', {
+                    sessionId: sessionId,
+                    error: 'reconnection_failed',
+                    message: 'QR scan successful but connection failed. Please try again.',
+                    code: 428
+                  });
+                } catch (emitError) {
+                  console.log('Failed to emit reconnection error:', emitError.message);
+                }
+              }
+            }, 5000);
+            
+            if (!qrCodeData) {
+              clearTimeout(timeout);
+              resolve({
+                message: 'QR scan successful, connecting...',
+                status: 'pairing_success',
+                sessionId: sessionId
+              });
+            }
+          }
+          else if (reason === 515) {
             console.log('🔄 Error 515: Connection restart required after pairing');
             isPaired = true;
             

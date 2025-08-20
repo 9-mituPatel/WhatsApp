@@ -9,6 +9,7 @@ class SessionManager {
     this.qrTimers = new Map(); // Track QR expiration timers
     this.sessionTimers = new Map(); // Track session expiration timers
     this.cleanupInterval = null;
+    this.isInitialized = false;
     
     // Configuration
     this.config = {
@@ -19,7 +20,17 @@ class SessionManager {
       MAX_CONCURRENT_SESSIONS: 50 // Max sessions per instance (increased for better scalability)
     };
     
-    this.startCleanupScheduler();
+    // Don't start cleanup scheduler automatically
+    // this.startCleanupScheduler();
+  }
+
+  // Initialize the session manager
+  initialize() {
+    if (!this.isInitialized) {
+      this.startCleanupScheduler();
+      this.isInitialized = true;
+      logger.info('SessionManager initialized');
+    }
   }
 
   // Add a new session
