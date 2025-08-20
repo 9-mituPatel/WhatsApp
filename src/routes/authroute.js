@@ -9,32 +9,12 @@ import { emitToSession, emitGlobal } from '../utils/socketManager.js';
 
 const router = express.Router();
 
-// Enhanced debug logger for better troubleshooting
-function debugLog(level, sessionId, message, data = {}) {
-  const timestamp = new Date().toISOString();
-  const emoji = {
-    info: '🔵',
-    warn: '🟡', 
-    error: '🔴',
-    success: '✅',
-    debug: '🔍'
-  }[level] || '📋';
-  
-  console.log(`${emoji} [${timestamp}] [${sessionId}] ${message}`);
-  if (Object.keys(data).length > 0) {
-    console.log('   Data:', JSON.stringify(data, null, 2));
-  }
-  
-  // Also log to winston
-  logger[level] ? logger[level](`[${sessionId}] ${message}`, data) : logger.info(`[${sessionId}] ${message}`, data);
-}
 
 // Enhanced Baileys logger with detailed error tracking
 const baileysLogger = {
   level: 'silent',
   fatal: (...args) => {
     const errorStr = args.join(' ');
-    console.log('💥 BAILEYS FATAL:', errorStr);
     logger.error('Baileys Fatal:', errorStr);
   },
   error: (...args) => {
@@ -46,7 +26,6 @@ const baileysLogger = {
         !errorStr.includes('socket hang up') &&
         !errorStr.includes('ENOTFOUND') &&
         !errorStr.includes('timeout')) {
-      console.log('⚠️  BAILEYS ERROR:', errorStr);
       logger.warn('Baileys Error:', errorStr);
     }
   },
@@ -67,17 +46,12 @@ router.post("/QRlogin", async (req, res) => {
     try {
         const { sessionId } = req.body;
         
-        debugLog('info', sessionId || 'unknown', '🚀 WhatsApp QR Login request received');
-        
         if (!sessionId) {
-            debugLog('error', 'unknown', '❌ Session ID is required but not provided');
             return res.status(400).json({
                 success: false,
                 message: "Session ID is required"
             });
         }
-        
-        debugLog('info', sessionId, '✅ Session ID validated', { sessionId });
 
         // Create session directory
         const sessionPath = path.join(process.cwd(), 'sessions', sessionId);
@@ -128,27 +102,20 @@ router.post("/QRlogin", async (req, res) => {
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr, isNewLogin } = update;
             
-            debugLog('info', sessionId, '🔄 Connection update received', {
+            logger.info(`Connection update for ${sessionId}: ${connection}`, {
                 connection,
                 hasQR: !!qr,
-                isNewLogin,
-                disconnectCode: lastDisconnect?.error?.output?.statusCode,
-                disconnectReason: lastDisconnect?.error?.message
+                isNewLogin
             });
             
             if (qr) {
                 try {
-                    debugLog('info', sessionId, '📱 Generating QR code...');
-                    
                     // Generate QR code as base64 data URL
                     qrCodeData = await qrcode.toDataURL(qr);
                     connectionStatus = 'qr_generated';
                     sessionStatus.set(sessionId, connectionStatus);
                     
-                    debugLog('success', sessionId, '✅ QR code generated successfully', {
-                        qrLength: qrCodeData.length,
-                        status: connectionStatus
-                    });
+                    logger.info(`QR code generated successfully for session: ${sessionId}`);
                     
                     // Emit QR code to frontend via Socket.IO
                     emitToSession(sessionId, 'qr-code', {
@@ -157,13 +124,8 @@ router.post("/QRlogin", async (req, res) => {
                         status: connectionStatus
                     });
                     
-                    debugLog('info', sessionId, '📡 QR code emitted to frontend');
-                    
                 } catch (error) {
-                    debugLog('error', sessionId, '❌ Failed to generate QR code', {
-                        error: error.message,
-                        stack: error.stack
-                    });
+                    logger.error(`Failed to generate QR code for ${sessionId}:`, error);
                 }
             }
             

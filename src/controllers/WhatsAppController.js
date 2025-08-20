@@ -4,26 +4,16 @@ import logger from '../utils/logger.js';
 class WhatsAppController {
     async qrLogin(req, res) {
         try {
-            console.log('\n🚀 ===== QR LOGIN REQUEST STARTED =====');
-            console.log('📝 Request Body:', req.body);
-            
             const { sessionId } = req.body;
             
             if (!sessionId) {
-                console.log('❌ No sessionId provided');
                 return res.status(400).json({
                     success: false,
                     message: "Session ID is required",
                 });
             }
 
-            console.log(`🆔 Creating session with ID: ${sessionId}`);
-            console.log('⏳ Calling WhatsAppService.createSession...');
-            
             const result = await WhatsAppService.createSession(sessionId);
-            
-            console.log('✅ Session creation completed');
-            console.log('📊 Result:', JSON.stringify(result, null, 2));
             
             let response;
             
@@ -63,15 +53,8 @@ class WhatsAppController {
                 };
             }
             
-            console.log('📤 Sending response:', JSON.stringify(response, null, 2));
-            console.log('🏁 ===== QR LOGIN REQUEST COMPLETED =====\n');
-            
             return res.status(200).json(response);
         } catch (error) {
-            console.log('💥 ERROR in qrLogin:', error);
-            console.log('📋 Error details:', error.message);
-            console.log('📚 Error stack:', error.stack);
-            
             logger.error('WhatsApp QR Login Error:', error);
             
             const errorResponse = {
@@ -79,9 +62,6 @@ class WhatsAppController {
                 message: "Internal server error",
                 error: error.message,
             };
-            
-            console.log('📤 Sending error response:', JSON.stringify(errorResponse, null, 2));
-            console.log('❌ ===== QR LOGIN REQUEST FAILED =====\n');
             
             return res.status(500).json(errorResponse);
         }

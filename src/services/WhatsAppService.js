@@ -13,19 +13,17 @@ const baileysLogger = {
   level: 'silent', // Suppress most Baileys logs
   fatal: (...args) => {
     const errorStr = args.join(' ');
-    console.log('🔴 BAILEYS FATAL:', errorStr);
     logger.error('Baileys Fatal:', errorStr);
   },
   error: (...args) => {
     const errorStr = args.join(' ');
     // Filter out common non-critical errors
     if (!errorStr.includes('stream-error') && 
-        !errorStr.includes('connection-close') && 
+        !errorStr.includes('connection-close') &&
         !errorStr.includes('ECONNRESET') &&
         !errorStr.includes('socket hang up') &&
         !errorStr.includes('ENOTFOUND') &&
         !errorStr.includes('timeout')) {
-      console.log('🟡 BAILEYS ERROR:', errorStr);
       logger.warn('Baileys Error:', errorStr);
     }
   },
@@ -169,7 +167,7 @@ class WhatsAppService {
 
       const timeout = setTimeout(() => {
         if (!isConnected && !qrCodeData && !isPaired) {
-          console.log('⏰ Connection timeout - no QR or connection established');
+          logger.warn(`Connection timeout for session ${sessionId}`);
           sock.end(undefined);
           reject(new Error('Connection timeout'));
         }
@@ -178,11 +176,9 @@ class WhatsAppService {
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr, isNewLogin } = update;
         
-        console.log(`🔄 Connection update for ${sessionId}:`, { 
-          connection, 
-          isNewLogin, 
-          hasQR: !!qr,
-          lastDisconnect: lastDisconnect?.error?.output?.statusCode 
+        logger.info(`Connection update for ${sessionId}: ${connection}`, {
+          isNewLogin,
+          hasQR: !!qr
         });
         
         if (qr) {
@@ -190,19 +186,7 @@ class WhatsAppService {
             qrCodeData = await qrcode.toDataURL(qr);
             connectionStatus = 'qr_generated';
             
-            // Also display QR in terminal for debugging
-            qrcode.toString(qr, { type: 'terminal', small: true }, (err, url) => {
-              if (err) {
-                logger.error('Error displaying QR code:', err);
-              } else {
-                console.log('\n📱 Scan this QR code with your WhatsApp mobile app:');
-                console.log(url);
-                console.log('\n1. Open WhatsApp on your phone');
-                console.log('2. Tap Settings → Linked Devices');
-                console.log('3. Tap "Link Device"');
-                console.log('4. Scan the QR code above\n');
-              }
-            });
+            // QR code generated successfully
             
             logger.info(`📱 QR Code generated for session: ${sessionId}`);
             await SessionManager.updateSessionStatus(sessionId, 'qr_generated', { qrCode: qrCodeData });

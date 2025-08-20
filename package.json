@@ -4,7 +4,6 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node --max-old-space-size=4096 app.js",
     "dev": "nodemon --exec \"node --max-old-space-size=4096\" app.js"
   },
